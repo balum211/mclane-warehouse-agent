@@ -1,0 +1,106 @@
+# Optional: MCP Toolbox for Databases configuration (https://googleapis.github.io/genai-toolbox/).
+# The ADK agent ships native Python tools that work on SQLite, BigQuery and AlloyDB, so Toolbox is
+# not required. Use this file when you want the database tools served over MCP instead, as in the
+# "Spec-Driven ADK Agent Development with Antigravity and Spec-kit" codelab (the constitution there
+# routes database access through tools.yaml), or to expose the same queries to other MCP clients
+# such as Antigravity itself.
+#
+# Run:   toolbox --tools-file toolbox/tools.yaml
+# ADK:   from toolbox_core import ToolboxSyncClient; tools = ToolboxSyncClient("http://127.0.0.1:5000").load_toolset("warehouse")
+# Check the Toolbox docs for the current key names (older releases use `kind`, newer ones `type`).
+
+sources:
+  wms-alloydb:
+    kind: alloydb-postgres
+    project: ${GOOGLE_CLOUD_PROJECT}
+    region: us-central1
+    cluster: wms-cluster
+    instance: wms-primary
+    database: wms
+    user: ${ALLOYDB_USER}
+    password: ${ALLOYDB_PASSWORD}
+  wms-bigquery:
+    kind: bigquery
+    project: ${GOOGLE_CLOUD_PROJECT}
+
+tools:
+  expiring-inventory:
+    kind: postgres-sql
+    source: wms-alloydb
+    description: Lots at a DC that are expired or expire on or before a date (FEFO / shrink risk).
+    parameters:
+      - name: dc_id
+        type: string
+        description: DC code such as MTX, MGA, MCA, MNY, FDL or FOH.
+      - name: through_date
+        type: string
+        description: Last expiry date to include, YYYY-MM-DD.
+    statement: |
+      SELECT v.dc_id, v.sku, i.description, i.temp_zone, v.location_id, v.lot_number, v.expiry_date,
+             v.qty_on_hand, v.qty_on_hand * i.unit_cost AS value_usd
+      FROM inventory v JOIN items i ON i.sku = v.sku
+      WHERE v.dc_id = $1 AND v.expiry_date <= $2::date AND v.qty_on_hand > 0
+      ORDER BY v.expiry_date
+      LIMIT 100;
+
+  pick-faces-below-min:
+    kind: postgres-sql
+    source: wms-alloydb
+    description: Pick faces at a DC whose available quantity is below the slot's replenishment minimum.
+    parameters:
+      - name: dc_id
+        type: string
+        description: DC code.
+    statement: |
+      SELECT s.location_id, s.sku, i.description, s.min_qty, s.max_qty, COALESCE(SUM(v.qty_on_hand), 0) AS face_qty
+      FROM slot_assignments s
+      JOIN items i ON i.sku = s.sku
+      LEFT JOIN inventory v ON v.location_id = s.location_id AND v.sku = s.sku AND v.status = 'AVAILABLE'
+      WHERE s.dc_id = $1
+      GROUP BY s.location_id, s.sku, i.description, s.min_qty, s.max_qty
+      HAVING COALESCE(SUM(v.qty_on_hand), 0) < s.min_qty
+      ORDER BY face_qty
+      LIMIT 50;
+
+  dock-appointments-today:
+    kind: postgres-sql
+    source: wms-alloydb
+    description: Dock appointments at a DC for one day with door, carrier, temperature zone and status.
+    parameters:
+      - name: dc_id
+        type: string
+        description: DC code.
+      - name: day
+        type: string
+        description: Day, YYYY-MM-DD.
+    statement: |
+      SELECT a.appointment_id, a.door_id, d.temp_capable, a.direction, a.carrier, a.reference_id, a.temp_zone,
+             a.scheduled_start, a.actual_arrival, a.status
+      FROM dock_appointments a JOIN dock_doors d ON d.door_id = a.door_id
+      WHERE a.dc_id = $1 AND a.scheduled_start >= $2::date AND a.scheduled_start < $2::date + 1
+      ORDER BY a.scheduled_start;
+
+  dc-fill-rate-bq:
+    kind: bigquery-sql
+    source: wms-bigquery
+    description: Daily case fill rate by DC over a date range, from BigQuery.
+    parameters:
+      - name: start_date
+        type: string
+        description: First ship date, YYYY-MM-DD.
+      - name: end_date
+        type: string
+        description: Last ship date, YYYY-MM-DD.
+    statement: |
+      SELECT o.dc_id, o.ship_date, SUM(l.qty_picked) / SUM(l.qty_ordered) AS case_fill_rate
+      FROM `mclane_wms.order_lines` l JOIN `mclane_wms.outbound_orders` o ON o.order_id = l.order_id
+      WHERE o.ship_date BETWEEN DATE(@start_date) AND DATE(@end_date)
+      GROUP BY o.dc_id, o.ship_date
+      ORDER BY o.dc_id, o.ship_date;
+
+toolsets:
+  warehouse:
+    - expiring-inventory
+    - pick-faces-below-min
+    - dock-appointments-today
+    - dc-fill-rate-bq
