@@ -1,0 +1,6 @@
+# Runtime dependencies for `adk deploy agent_engine` / `adk deploy cloud_run`.
+google-adk>=1.18
+google-cloud-bigquery>=3.25
+python-dotenv>=1.0
+google-cloud-alloydb-connector[pg8000]>=1.4
+pg8000>=1.31
