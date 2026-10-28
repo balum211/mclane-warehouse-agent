@@ -18,9 +18,9 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
-ARG_DEFAULTS = {"dc_id": "MTX", "zone": "DRY", "sku_or_keyword": "fries", "term": "sku"}
+ARG_DEFAULTS = {"dc_id": "MTX", "zone": "DRY", "sku_or_keyword": "fries", "term": "sku", "customer": "Taco Trail"}
 ROUTES = {"re-plan": "disruption_replan_pipeline", "briefing": "shift_briefing_pipeline",
-          "behind": "fulfillment_agent"}
+          "behind": "fulfillment_agent", "otd": "delivery_otd_agent"}
 
 
 class ScriptedLlm(BaseLlm):
@@ -51,6 +51,8 @@ class ScriptedLlm(BaseLlm):
             if "appointment_id" in sig.parameters:
                 from warehouse_agent.tools import get_dock_exceptions
                 args["appointment_id"] = get_dock_exceptions("MTX")["waiting_for_door"][0]["appointment_id"]
+            if name == "get_route_miles":
+                args["route_id"] = "MTX-R07"
             yield _call(name, args)
             return
         yield LlmResponse(content=types.Content(role="model", parts=[
@@ -86,18 +88,20 @@ def _errors(events):
 def test_disruption_replan_pipeline_end_to_end():
     events, session, llm = asyncio.run(_run("Inbound trailer is late and we're short pickers at MTX, re-plan tonight"))
     authors = {e.author for e in events}
-    assert {"replan_dock_agent", "replan_labor_agent", "replan_waves_agent", "replan_writer"} <= authors
-    for key in ("replan_dock", "replan_labor", "replan_waves"):
+    assert {"replan_dock_agent", "replan_labor_agent", "replan_waves_agent", "replan_otd_agent",
+            "replan_writer"} <= authors
+    for key in ("replan_dock", "replan_labor", "replan_waves", "replan_otd"):
         assert "SCRIPTED SUMMARY" in session.state[key]
     assert "assess_inbound_impact" in session.state["replan_dock"]
     writer_prompt = llm.instructions_seen[-1]
     assert "Disruption re-plan" in writer_prompt and "forecast_labor_requirement" in writer_prompt
+    assert "assess_route_otd_risk" in writer_prompt
     assert not _errors(events)
 
 
 def test_shift_briefing_pipeline_end_to_end():
     events, session, _ = asyncio.run(_run("Give me the shift briefing for MTX"))
-    for key in ("inventory_snapshot", "fulfillment_snapshot", "labor_snapshot", "dock_snapshot"):
+    for key in ("inventory_snapshot", "fulfillment_snapshot", "labor_snapshot", "dock_snapshot", "delivery_snapshot"):
         assert key in session.state
     assert any(e.author == "briefing_writer" for e in events)
     assert not _errors(events)
@@ -106,4 +110,13 @@ def test_shift_briefing_pipeline_end_to_end():
 def test_zone_question_routes_to_fulfillment():
     events, _, _ = asyncio.run(_run("Why are we behind in Zone C?"))
     assert any(e.author == "fulfillment_agent" for e in events)
+    assert not _errors(events)
+
+
+def test_otd_question_routes_to_delivery_agent_and_calls_every_tool():
+    events, _, _ = asyncio.run(_run("Why is restaurant OTD down at FDL?"))
+    assert any(e.author == "delivery_otd_agent" for e in events)
+    called = {p.function_call.name for e in events for p in (e.content.parts if e.content else []) if p.function_call}
+    from warehouse_agent.tools import DELIVERY_TOOLS
+    assert {f.__name__ for f in DELIVERY_TOOLS} <= called
     assert not _errors(events)

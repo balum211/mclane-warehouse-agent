@@ -7,7 +7,8 @@ gcloud auth application-default login
 export PROJECT={{PROJECT_ID}} REGION=us-central1
 bash deploy/setup_gcp.sh            # enables APIs, generates data, loads BigQuery dataset mclane_wms
 ```
-Optional AlloyDB backend: `ALLOYDB_PASSWORD=... bash deploy/setup_alloydb.sh`.
+Optional AlloyDB backend: `ALLOYDB_PASSWORD=... bash deploy/setup_alloydb.sh`. Optional Cloud SQL
+backend (for example the sdd-adk-antigravity codelab instance): `DB_PASSWORD=... bash deploy/setup_cloudsql.sh`.
 
 ## 2. Configure the agent
 ```bash
@@ -24,7 +25,7 @@ bash deploy/deploy_agent_engine.sh
 This runs `adk deploy agent_engine ... warehouse_agent` (the agent folder is self-contained:
 `requirements.txt` and `.env` inside it) and grants the Agent Engine service agent
 (`service-<PROJECT_NUMBER>@gcp-sa-aiplatform-re.iam.gserviceaccount.com`) BigQuery job/data and
-AlloyDB client roles. Note the `projects/.../locations/.../reasoningEngines/...` name it prints and
+AlloyDB / Cloud SQL client roles. Note the `projects/.../locations/.../reasoningEngines/...` name it prints and
 smoke-test in the console playground.
 
 ## 4. Register in Gemini Enterprise

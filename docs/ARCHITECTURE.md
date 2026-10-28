@@ -13,14 +13,16 @@ flowchart LR
     MA["Manhattan Active WM<br/>MTX, MGA"]
     BY["Blue Yonder WMS<br/>MCA, MNY"]
     AR["Argent<br/>FDL, FOH"]
+    TMS["Telematics / TMS<br/>geofence ENTER/EXIT, ETAs"]
+    PCM["PC*MILER<br/>(Trimble Maps)"]
   end
   subgraph Ingest["Ingestion and harmonization"]
     PS["Pub/Sub topics<br/>(orders, tasks, ASNs, appointments, inventory)"]
     MAP["Mapping layer<br/>wms_field_map + transforms"]
   end
-  subgraph Data["Canonical WMS model (23 tables)"]
+  subgraph Data["Canonical WMS + delivery model (28 tables)"]
     BQ[("BigQuery<br/>mclane_wms<br/>analytics + history")]
-    ADB[("AlloyDB for PostgreSQL<br/>operational, low latency")]
+    ADB[("AlloyDB / Cloud SQL for PostgreSQL<br/>operational, low latency")]
   end
   subgraph Agents["Google ADK multi-agent system (Agent Engine)"]
     ORCH["warehouse_ops_orchestrator"]
@@ -29,6 +31,7 @@ flowchart LR
     FUL["fulfillment_agent"]
     LAB["labor_agent"]
     DOCK["dock_yard_agent"]
+    OTD["delivery_otd_agent"]
     INT["wms_integration_agent"]
     SQL["data_analyst_agent"]
     BRIEF["shift_briefing_pipeline<br/>parallel collectors -> writer"]
@@ -38,17 +41,21 @@ flowchart LR
   ACT[("agent_actions<br/>PROPOSED -> APPROVED")]
   WB["Write-back via integration layer<br/>(WMS APIs / interfaces)"]
 
-  MA & BY & AR --> PS --> MAP --> BQ & ADB
+  MA & BY & AR & TMS --> PS --> MAP --> BQ & ADB
+  PCM -- "lane_miles batch" --> BQ & ADB
+  OTD -. "live miles (PCMILER_API_KEY)" .-> PCM
   GE <--> ORCH
-  ORCH --> INV & SLOT & FUL & LAB & DOCK & INT & SQL & BRIEF & REPLAN
-  INV & SLOT & FUL & LAB & DOCK & INT & SQL & BRIEF & REPLAN -- "tools (portable SQL)" --> BQ
-  INV & SLOT & FUL & LAB & DOCK -. "or" .-> ADB
-  INV & SLOT & FUL & LAB & DOCK -- propose_action --> ACT
+  ORCH --> INV & SLOT & FUL & LAB & DOCK & OTD & INT & SQL & BRIEF & REPLAN
+  INV & SLOT & FUL & LAB & DOCK & OTD & INT & SQL & BRIEF & REPLAN -- "tools (portable SQL)" --> BQ
+  INV & SLOT & FUL & LAB & DOCK & OTD -. "or" .-> ADB
+  INV & SLOT & FUL & LAB & DOCK & OTD -- propose_action --> ACT
   ACT -- human approval --> WB --> MA & BY & AR
 ```
 
 **Hackathon MVP (what is in this repo)**
-- Synthetic WMS data for six DCs is generated and loaded to SQLite (local), BigQuery or AlloyDB.
+- Synthetic WMS and delivery data for six DCs is generated and loaded to SQLite (local), BigQuery,
+  AlloyDB or Cloud SQL for PostgreSQL. Delivery data covers DC and customer geolocations, geofences,
+  PC*MILER lane miles, route trips and stops with receiving windows, and telematics geofence events.
   The Pub/Sub ingestion and write-back boxes are the pilot design; in the MVP the generator stands in
   for ingestion and approved actions are logged in `agent_actions`.
 - One canonical schema ([DATA_MODEL.md](DATA_MODEL.md)) means every tool works for every WMS.
@@ -65,10 +72,11 @@ flowchart LR
 | `fulfillment_agent` | LlmAgent | Orders, waves vs cutoff, zone backlog diagnosis, shorts, wave sequencing |
 | `labor_agent` | LlmAgent | Performance vs engineered standards, labor gap, rosters |
 | `dock_yard_agent` | LlmAgent | Exceptions, arrival prediction, inbound impact, door assignment |
+| `delivery_otd_agent` | LlmAgent | Retail vs Restaurant OTD, routes on the road, dwell changes, geofence activity, PC*MILER miles, customer windows at risk |
 | `wms_integration_agent` | LlmAgent | Cross-WMS landscape, interface health, field mapping, KPI scorecard |
 | `data_analyst_agent` | LlmAgent | Guarded read-only SQL for anything else |
-| `shift_briefing_pipeline` | SequentialAgent(ParallelAgent x4, writer) | Start-of-shift briefing |
-| `disruption_replan_pipeline` | SequentialAgent(ParallelAgent x3, writer) | Mid-shift re-plan (late inbound + labor shortfall) |
+| `shift_briefing_pipeline` | SequentialAgent(ParallelAgent x5, writer) | Start-of-shift briefing (inventory, fulfillment, labor, dock, delivery) |
+| `disruption_replan_pipeline` | SequentialAgent(ParallelAgent x4, writer) | Mid-shift re-plan (late inbound + labor shortfall), including which customer windows it costs |
 
 The parallel collectors write their findings to session state (`output_key`), and the writer's
 instruction provider reads that state, so the writer only sees facts gathered by tools.
@@ -133,7 +141,36 @@ instruction provider reads that state, so the writer only sees facts gathered by
 - **KPIs**: inventory record accuracy %, $ variance, shrink $ from expiry, short picks per 1,000 lines.
 - **Approver**: inventory control lead (CYCLE_COUNT, REPLENISH).
 
-### 2.5 Supervisor copilot
+### 2.5 Yard, dwell and on-time delivery (McLane transportation view)
+- **Inputs**: DC and customer geolocations and geofences (yard 450 m, store 120 m, restaurant 90 m),
+  telematics ENTER / EXIT events, route trips (planned vs actual departure) and stops (receiving
+  window, planned arrival, ETA, actual arrival / departure), PC*MILER practical and shortest miles
+  and drive time per lane, dock appointments.
+- **Method**:
+  - **OTD**: a stop is on time when the truck enters the customer geofence by the window end
+    (restaurant windows 60 min, retail 120 min). Compared week over week, split Retail vs
+    Restaurant and by route, chain or customer, with a late-reason attribution: LATE_DEPARTURE
+    (trailer left 20+ min late), CUSTOMER_DWELL (extra minutes at earlier stops), TRAFFIC (drive
+    time over PC*MILER), ROUTE_PLAN (window not reachable on the plan).
+  - **Dwell time change**: inbound yard dwell (gate-in to gate-out) by carrier, split into
+    gate-to-door, unload and door-to-gate; customer stop dwell by chain against its standard.
+  - **Geofence activity**: trailers inside the yard geofence, with IN_YARD_NOT_CHECKED_IN (early or
+    missed check-in) and DETENTION_RISK (over 120 min) flags; trucks currently at customers.
+  - **Warehouse to delivery link**: `assess_route_otd_risk` projects each wave's finish with the
+    crew on hand (earliest-deadline-first, night shift then day shift), turns minutes past cutoff
+    into late departures for that wave's routes, and checks every planned stop against its window.
+    Re-running with the re-plan crew shows the OTD recovered.
+  - **PC*MILER**: live PC*MILER Web Services when `PCMILER_API_KEY` is set, else the `lane_miles`
+    table (a PC*MILER batch export; synthetic in the demo), else a labelled great-circle x circuity
+    estimate. Every answer names its source.
+- **Tools**: `get_otd_performance`, `get_route_status`, `assess_route_otd_risk`,
+  `get_dwell_time_changes`, `get_geofence_activity`, `get_route_miles`, `lookup_customer_site`.
+- **KPIs**: OTD % Retail and Restaurant, on-time departures %, avg minutes late, inbound yard dwell
+  and detention minutes, customer dwell vs standard, PC*MILER planned vs actual miles.
+- **Approver**: transportation / routing manager (RESEQUENCE_ROUTE, NOTIFY_CUSTOMER); dock / yard
+  lead for yard moves (REASSIGN_DOOR).
+
+### 2.6 Supervisor copilot
 - **Inputs**: everything above through the orchestrator.
 - **Method**: routing to specialists, `diagnose_zone_backlog` for "why are we behind" questions,
   shift briefing and re-plan pipelines, `lookup_order` for customer questions, guarded SQL for
@@ -141,15 +178,16 @@ instruction provider reads that state, so the writer only sees facts gathered by
 - **KPIs**: time to answer, answers with a next action and approver (target 100%), adoption
   (weekly active supervisors), actions approved vs rejected.
 
-### 2.6 Cross-WMS integration view
+### 2.7 Cross-WMS integration view
 - **Method**: interface health by platform and interface with spike detection; field mapping
   lookup; KPI scorecard by DC and platform (fill rate, performance, inbound on-time, inventory
   accuracy, integration error rate).
 - **KPIs**: interface error rate, mean time to detect a failing interface.
 
 ## Deployment
-- Local: `make data && adk web .`
-- Agent Engine: `bash deploy/deploy_agent_engine.sh` (BigQuery or AlloyDB backend)
+- Local: `uv sync && uv run adk web .` (the SQLite demo database is generated on first use)
+- FastAPI server, as in the sdd-adk-antigravity codelab: `uv run uvicorn server:app --port 8080`
+- Agent Engine: `bash deploy/deploy_agent_engine.sh` (BigQuery, AlloyDB or Cloud SQL backend)
 - Gemini Enterprise: `bash deploy/register_gemini_enterprise.sh` or the console (Agents > Add agent)
 - Cloud Run alternative with the ADK web UI: `make deploy-cloud-run`
 

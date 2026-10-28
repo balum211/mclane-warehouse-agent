@@ -8,13 +8,14 @@ warehouse_ops_orchestrator (LlmAgent, routes requests)
  |- fulfillment_agent        orders, waves vs cutoff, short picks, wave release sequencing
  |- labor_agent              performance vs engineered standards, labor gap, rosters
  |- dock_yard_agent          appointments, detention, door conflicts, cold-chain door checks
+ |- delivery_otd_agent       Retail vs Restaurant OTD, dwell changes, geofences, PC*MILER miles
  |- wms_integration_agent    Manhattan Active / Blue Yonder / Argent mapping, interface health, KPIs
  |- data_analyst_agent       guarded read-only SQL for ad-hoc questions
  |- shift_briefing_pipeline  SequentialAgent
- |    |- briefing_collectors ParallelAgent (inventory, fulfillment, labor, dock snapshots)
+ |    |- briefing_collectors ParallelAgent (inventory, fulfillment, labor, dock, delivery snapshots)
  |    '- briefing_writer     writes the start-of-shift briefing from session state
  '- disruption_replan_pipeline  SequentialAgent (late inbound + labor shortfall, mid-shift)
-      |- replan_assessors    ParallelAgent (dock/inbound impact, labor gap, wave risk)
+      |- replan_assessors    ParallelAgent (dock/inbound impact, labor gap, wave risk, OTD risk)
       '- replan_writer       writes the re-plan with gains, approvers and before/after KPIs
 
 Run locally:  adk web .   (from the repo root)   or   adk run warehouse_agent
@@ -28,12 +29,13 @@ from google.genai import types
 
 from . import prompts
 from .config import MODEL, SNAPSHOT_MODEL, TEMPERATURE
-from .tools import (ANALYTICS_TOOLS, DOCK_TOOLS, FULFILLMENT_TOOLS, INTEGRATION_TOOLS, INVENTORY_TOOLS,
-                                   LABOR_TOOLS, SLOTTING_TOOLS, assess_inbound_impact, decide_action,
-                                   forecast_labor_requirement, get_dock_exceptions, get_expiring_inventory,
-                                   get_order_fulfillment_summary, get_replenishment_needs, get_shift_roster,
-                                   get_stockout_risk, get_wave_progress, get_wms_landscape, list_actions,
-                                   predict_dock_arrivals, propose_action, recommend_door, recommend_wave_release)
+from .tools import (ANALYTICS_TOOLS, DELIVERY_TOOLS, DOCK_TOOLS, FULFILLMENT_TOOLS, INTEGRATION_TOOLS,
+                    INVENTORY_TOOLS, LABOR_TOOLS, SLOTTING_TOOLS, assess_inbound_impact, assess_route_otd_risk,
+                    decide_action, forecast_labor_requirement, get_dock_exceptions, get_dwell_time_changes,
+                    get_expiring_inventory, get_geofence_activity, get_order_fulfillment_summary, get_otd_performance,
+                    get_replenishment_needs, get_route_status, get_shift_roster, get_stockout_risk, get_wave_progress,
+                    get_wms_landscape, list_actions, predict_dock_arrivals, propose_action, recommend_door,
+                    recommend_wave_release)
 from .tools.common import now
 
 GEN_CONFIG = types.GenerateContentConfig(temperature=TEMPERATURE)
@@ -80,6 +82,7 @@ def _briefing_instruction(ctx: ReadonlyContext) -> str:
         fulfillment=s.get("fulfillment_snapshot", "(not collected)"),
         labor=s.get("labor_snapshot", "(not collected)"),
         dock=s.get("dock_snapshot", "(not collected)"),
+        delivery=s.get("delivery_snapshot", "(not collected)"),
         **_clock())
 
 
@@ -89,6 +92,7 @@ def _replan_instruction(ctx: ReadonlyContext) -> str:
         dock=s.get("replan_dock", "(not collected)"),
         labor=s.get("replan_labor", "(not collected)"),
         waves=s.get("replan_waves", "(not collected)"),
+        delivery=s.get("replan_otd", "(not collected)"),
         **_clock())
 
 
@@ -116,6 +120,11 @@ def build_root_agent(model=None, snapshot_model=None) -> LlmAgent:
         "dock_yard_agent",
         "Dock and yard: appointments, late carriers, detention, door conflicts, cold-chain door checks.",
         prompts.DOCK, DOCK_TOOLS, model)
+    delivery_agent = _specialist(
+        "delivery_otd_agent",
+        "Yard and delivery: Retail vs Restaurant on-time delivery, routes on the road, dwell time changes, "
+        "geofence activity, PC*MILER miles, customer geolocation and receiving windows.",
+        prompts.DELIVERY, DELIVERY_TOOLS, model)
     integration_agent = _specialist(
         "wms_integration_agent",
         "Cross-WMS: Manhattan Active / Blue Yonder / Argent landscape, interface errors, field mapping, KPIs.",
@@ -131,7 +140,7 @@ def build_root_agent(model=None, snapshot_model=None) -> LlmAgent:
 
     collectors = ParallelAgent(
         name="briefing_collectors",
-        description="Collects inventory, fulfillment, labor and dock status in parallel.",
+        description="Collects inventory, fulfillment, labor, dock and delivery status in parallel.",
         sub_agents=[
             _snapshot("inventory_snapshot_agent",
                       "inventory risks: expiring lots in 2 days, CRITICAL/HIGH replenishments, tomorrow's stockout risks",
@@ -145,6 +154,11 @@ def build_root_agent(model=None, snapshot_model=None) -> LlmAgent:
             _snapshot("dock_snapshot_agent",
                       "dock: today's exceptions (temp mismatches, trailers waiting, door conflicts, late carriers)",
                       [get_dock_exceptions], "dock_snapshot", snapshot_model),
+            _snapshot("delivery_snapshot_agent",
+                      "delivery and yard: Retail vs Restaurant OTD this week vs last, routes running late today, "
+                      "dwell time increases, trailers in the yard geofence not checked in or at detention risk",
+                      [get_otd_performance, get_route_status, get_dwell_time_changes, get_geofence_activity],
+                      "delivery_snapshot", snapshot_model),
         ],
     )
     briefing_writer = LlmAgent(
@@ -162,7 +176,7 @@ def build_root_agent(model=None, snapshot_model=None) -> LlmAgent:
 
     assessors = ParallelAgent(
         name="replan_assessors",
-        description="Assesses dock/inbound impact, labor gap and wave risk in parallel.",
+        description="Assesses dock/inbound impact, labor gap, wave risk and customer OTD risk in parallel.",
         sub_agents=[
             _snapshot("replan_dock_agent",
                       "dock and inbound: late or waiting trailers, the freight they carry that tomorrow's orders need "
@@ -178,6 +192,11 @@ def build_root_agent(model=None, snapshot_model=None) -> LlmAgent:
                       "waves: progress vs cutoff, waves at risk, and the recommended release sequence with the "
                       "minimum crew needed",
                       [get_wave_progress, recommend_wave_release], "replan_waves", snapshot_model),
+            _snapshot("replan_otd_agent",
+                      "customer delivery risk: routes that will depart late from tonight's waves and the Retail / "
+                      "Restaurant stops that miss their receiving window with tonight's crew, then the same with "
+                      "5 pickers on the waves (call assess_route_otd_risk twice)",
+                      [assess_route_otd_risk], "replan_otd", snapshot_model),
         ],
     )
     replan_writer = LlmAgent(
@@ -199,7 +218,7 @@ def build_root_agent(model=None, snapshot_model=None) -> LlmAgent:
         description="McLane warehouse operations copilot across Manhattan Active, Blue Yonder and Argent DCs.",
         instruction=_with_shared(prompts.ORCHESTRATOR),
         tools=[get_wms_landscape, list_actions, decide_action],
-        sub_agents=[inventory_agent, slotting_agent, fulfillment_agent, labor_agent, dock_agent,
+        sub_agents=[inventory_agent, slotting_agent, fulfillment_agent, labor_agent, dock_agent, delivery_agent,
                     integration_agent, analyst_agent, shift_briefing, disruption_replan],
         generate_content_config=GEN_CONFIG,
     )

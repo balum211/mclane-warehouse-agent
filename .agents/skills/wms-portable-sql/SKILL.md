@@ -1,13 +1,13 @@
 ---
 name: wms-portable-sql
-description: Use when writing or changing SQL inside warehouse_agent tools, or when a tool query fails on BigQuery or AlloyDB. Enforces the portable SQL subset that runs unchanged on SQLite, BigQuery and AlloyDB (PostgreSQL), and verifies it with the DuckDB portability test.
+description: Use when writing or changing SQL inside warehouse_agent tools, or when a tool query fails on BigQuery, AlloyDB or Cloud SQL. Enforces the portable SQL subset that runs unchanged on SQLite, BigQuery and PostgreSQL (AlloyDB, Cloud SQL), and verifies it with the DuckDB portability test.
 ---
 
 # Portable SQL for the WMS tools
 
 ## Goal
 Every query in `warehouse_agent/tools/*.py` must run unchanged on SQLite (local), BigQuery and
-AlloyDB. `warehouse_agent/db.py` qualifies table names and converts parameters; you keep the SQL
+PostgreSQL (AlloyDB, Cloud SQL). `warehouse_agent/db.py` qualifies table names and converts parameters; you keep the SQL
 inside the common subset.
 
 ## Rules

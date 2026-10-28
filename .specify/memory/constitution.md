@@ -5,7 +5,7 @@
 ### I. Grounded, quantified recommendations
 Every answer is grounded in tool results over the canonical WMS data. Recommendations state the
 rationale, the expected gain (picks/hr, travel feet, labor hours, dwell minutes, orders protected,
-dollars) and the role that must approve. No invented SKUs, numbers, people or doors.
+customer windows kept, dollars) and the role that must approve. No invented SKUs, numbers, people or doors.
 
 ### II. Hard operational constraints
 Safety, temperature zones (DRY / COOLER / FREEZER) and FEFO are never traded off for speed or
@@ -16,13 +16,16 @@ Agents recommend; people decide. Every state change is recorded with `propose_ac
 PROPOSED and only `decide_action` (after explicit user approval) moves it to APPROVED. Agents never
 claim a change was made in a WMS.
 
-### IV. One canonical model, three WMS platforms
+### IV. One canonical model, three WMS platforms, one delivery view
 Manhattan Active WM, Blue Yonder WMS and Argent are harmonized into `warehouse_agent/schema.py`.
-Tools are platform-agnostic; source-specific names live only in `wms_field_map`.
+Tools are platform-agnostic; source-specific names live only in `wms_field_map`. Delivery data
+(telematics geofences, route stops, PC*MILER lanes) uses the same model, and OTD is always reported
+for Retail and Restaurant separately with the definitions in the `mclane-otd-dwell` skill.
 
 ### V. Portable data access
 Tools write SQL once (portable subset, `{table}` placeholders, `:param` binds) and run on SQLite,
-BigQuery and AlloyDB through `warehouse_agent/db.py`. Session state uses ADK `ToolContext` /
+BigQuery and PostgreSQL (AlloyDB, Cloud SQL) through `warehouse_agent/db.py`. External services
+(PC*MILER) always have a stored or estimated fallback and answers name their source. Session state uses ADK `ToolContext` /
 `output_key`, never globals.
 
 ### VI. Test before demo
@@ -45,4 +48,4 @@ change in `specs/`.
 ## Governance
 This constitution supersedes ad-hoc preferences. Amendments bump the version and are recorded here.
 
-**Version**: 1.0.0 | **Ratified**: 2026-10-26 | **Last Amended**: 2026-10-26
+**Version**: 1.1.0 | **Ratified**: 2026-10-26 | **Last Amended**: 2026-10-28 (delivery view, Cloud SQL)

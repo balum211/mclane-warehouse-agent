@@ -28,7 +28,7 @@ with 500 SKUs (about 350 slotted per DC) and about 7,500 daily order lines (1,00
 5. Supervisor copilot: answer questions ("Why are we behind in Zone C?") and suggest corrective actions.
 </task>
 
-<tools_and_data>Use: BigQuery (WMS/LMS data, dataset mclane_wms, 23 tables), AlloyDB for operational
+<tools_and_data>Use: BigQuery (WMS/LMS data, dataset mclane_wms, 28 tables incl. route stops, geofence events and PC*MILER lanes), AlloyDB for operational
 reads, Vertex AI (demand/velocity forecasting, anomaly detection, ETA prediction), Gemini (copilot via
 Google ADK multi-agent on Agent Engine, surfaced in Gemini Enterprise; multimodal photo-based
 damage/label checks), Pub/Sub (real-time events).

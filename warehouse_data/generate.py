@@ -15,6 +15,9 @@ Planted operational problems the agents should find:
   * call-outs that leave tomorrow's night shift short of required pick hours
   * an integration error spike (UOM mismatch) on one Blue Yonder DC
   * cycle count variances concentrated on a few high-value SKUs
+  * delivery side (warehouse_data/delivery.py): late restaurant departures at FDL, a chronically
+    late route, rising customer and inbound yard dwell, a trailer in the yard geofence that has
+    not checked in
 
 All names are fictional. Source-system message names are illustrative.
 
@@ -30,6 +33,7 @@ import random
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
+from warehouse_data.delivery import DeliveryBuilder
 from warehouse_data.schema import TABLES, columns
 
 DEFAULT_AS_OF = date(2026, 10, 27)
@@ -154,6 +158,7 @@ class Gen:
     def __init__(self, as_of: date, scale: float, seed: int):
         self.as_of = as_of
         self.scale = scale
+        self.seed = seed
         self.r = random.Random(seed)
         self.now = datetime.combine(as_of, time(10, 30))  # demo "current time"
         self.rows: dict[str, list[dict]] = {t: [] for t in TABLES}
@@ -644,6 +649,10 @@ class Gen:
         arrival = start + timedelta(minutes=int(r.gauss(5, 20)))
         assigned = arrival + timedelta(minutes=r.randint(5, 40))
         done = end + timedelta(minutes=r.randint(-15, 45))
+        if arrival > now:  # slot has started but the trailer isn't here yet
+            return None, "SCHEDULED", None, None
+        if assigned > now:
+            return arrival, "CHECKED_IN", None, None
         if done > now:
             return arrival, "AT_DOOR", None, assigned
         return arrival, "COMPLETED", done, assigned
@@ -714,6 +723,7 @@ class Gen:
         self.build_dock()
         self.build_cycle_counts()
         self.build_integration()
+        DeliveryBuilder(self).run()  # geo, PC*MILER lanes, trips / stops / OTD, geofence events
         return self.rows
 
 

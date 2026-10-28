@@ -11,6 +11,8 @@ Sections 4 and 5 of the hackathon brief.
 | Slotting | Velocity vs travel swaps, affinity, ergonomics | Add cube fit, seasonality, Vertex AI velocity forecast; weekly re-slot batch with move labor cost |
 | Wave / labor | EDF sequencing, labor gap by zone, OT options | Live LMS standards per task type, travel-aware pick path, intraday re-forecast every 30 min |
 | Dock | Rule-based exceptions, carrier-median ETA, door recommender | Vertex AI ETA model using telematics, traffic and history; yard management integration |
+| Delivery (OTD, dwell, geofence) | Retail vs Restaurant OTD with late reasons, dwell change by carrier / chain, yard geofence flags, wave risk turned into missed windows | Live telematics geofence events via Pub/Sub; TMS route plans; customer ETA notifications; window-aware route re-sequencing |
+| PC*MILER | Synthetic `lane_miles`; Web Services client behind `PCMILER_API_KEY` | Nightly PC*MILER batch for all McLane lanes; live calls for re-routes; planned vs actual miles review |
 | Inventory integrity | Rule-based anomaly scan, FEFO, replenishment, cycle-count list | Vertex AI anomaly detection on transaction streams; risk-based cycle counting program |
 | Copilot | ADK multi-agent, Gemini Enterprise, guarded SQL, photo checks | SSO roles, per-DC data scoping, evaluation set (ADK eval) with 50+ supervisor questions |
 | Actions | Logged PROPOSED/APPROVED in `agent_actions` | Write-back of approved actions via WMS APIs / integration layer with audit trail |
@@ -48,6 +50,9 @@ Sections 4 and 5 of the hackathon brief.
 | Pick travel per case | -10-15% after re-slot |
 | Waves completed before cutoff | 98%+ |
 | Dock dwell (inbound) | -20%; detention charges -30% |
+| On-time delivery (OTD) | Retail 95%+, Restaurant 93%+ (receiving window met) |
+| Customer stop dwell vs standard | within +5 min for 90% of stops |
+| On-time route departures | 95%+ |
 | Inventory record accuracy | 97%+ |
 | Short picks per 1,000 lines | -25% |
 | Expired / short-dated shrink $ | -20% |

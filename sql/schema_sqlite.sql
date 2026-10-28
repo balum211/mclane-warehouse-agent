@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS distribution_centers (
   wms_system TEXT,
   square_feet INTEGER,
   timezone TEXT,
+  latitude REAL,
+  longitude REAL,
   PRIMARY KEY (dc_id)
 );
 
@@ -36,6 +38,11 @@ CREATE TABLE IF NOT EXISTS customers (
   route_id TEXT,
   city TEXT,
   state TEXT,
+  latitude REAL,
+  longitude REAL,
+  delivery_window_start TEXT,
+  delivery_window_end TEXT,
+  standard_dwell_minutes INTEGER,
   PRIMARY KEY (customer_id)
 );
 
@@ -274,6 +281,93 @@ CREATE TABLE IF NOT EXISTS wms_field_map (
   transform_rule TEXT
 );
 
+CREATE TABLE IF NOT EXISTS geofences (
+  geofence_id TEXT,
+  dc_id TEXT,
+  site_type TEXT,
+  site_id TEXT,
+  name TEXT,
+  latitude REAL,
+  longitude REAL,
+  radius_m INTEGER,
+  PRIMARY KEY (geofence_id)
+);
+
+CREATE TABLE IF NOT EXISTS geofence_events (
+  event_id TEXT,
+  dc_id TEXT,
+  geofence_id TEXT,
+  site_type TEXT,
+  site_id TEXT,
+  asset_id TEXT,
+  carrier TEXT,
+  reference_type TEXT,
+  reference_id TEXT,
+  event_type TEXT,
+  event_time TEXT,
+  latitude REAL,
+  longitude REAL,
+  PRIMARY KEY (event_id)
+);
+
+CREATE TABLE IF NOT EXISTS lane_miles (
+  origin_id TEXT,
+  dest_id TEXT,
+  dc_id TEXT,
+  practical_miles REAL,
+  shortest_miles REAL,
+  drive_minutes INTEGER,
+  source TEXT,
+  computed_date TEXT,
+  PRIMARY KEY (origin_id, dest_id)
+);
+
+CREATE TABLE IF NOT EXISTS route_trips (
+  trip_id TEXT,
+  dc_id TEXT,
+  route_id TEXT,
+  ship_date TEXT,
+  segment TEXT,
+  tractor_id TEXT,
+  planned_departure TEXT,
+  actual_departure TEXT,
+  departure_delay_minutes INTEGER,
+  delay_reason TEXT,
+  planned_miles REAL,
+  actual_miles REAL,
+  stops_planned INTEGER,
+  stops_completed INTEGER,
+  returned_at TEXT,
+  status TEXT,
+  PRIMARY KEY (trip_id)
+);
+
+CREATE TABLE IF NOT EXISTS route_stops (
+  stop_id TEXT,
+  trip_id TEXT,
+  dc_id TEXT,
+  route_id TEXT,
+  ship_date TEXT,
+  stop_seq INTEGER,
+  customer_id TEXT,
+  segment TEXT,
+  order_id TEXT,
+  miles_from_prev REAL,
+  window_start TEXT,
+  window_end TEXT,
+  planned_arrival TEXT,
+  eta TEXT,
+  actual_arrival TEXT,
+  actual_departure TEXT,
+  dwell_minutes INTEGER,
+  standard_dwell_minutes INTEGER,
+  on_time INTEGER,
+  late_minutes INTEGER,
+  late_reason TEXT,
+  status TEXT,
+  PRIMARY KEY (stop_id)
+);
+
 CREATE TABLE IF NOT EXISTS agent_actions (
   action_id TEXT,
   created_at TEXT,
@@ -322,6 +416,16 @@ CREATE INDEX IF NOT EXISTS ix_cycle_counts_dc ON cycle_counts (dc_id);
 
 CREATE INDEX IF NOT EXISTS ix_wms_integration_events_dc ON wms_integration_events (dc_id);
 
+CREATE INDEX IF NOT EXISTS ix_geofences_dc ON geofences (dc_id);
+
+CREATE INDEX IF NOT EXISTS ix_geofence_events_dc ON geofence_events (dc_id);
+
+CREATE INDEX IF NOT EXISTS ix_lane_miles_dc ON lane_miles (dc_id);
+
+CREATE INDEX IF NOT EXISTS ix_route_trips_dc ON route_trips (dc_id);
+
+CREATE INDEX IF NOT EXISTS ix_route_stops_dc ON route_stops (dc_id);
+
 CREATE INDEX IF NOT EXISTS ix_agent_actions_dc ON agent_actions (dc_id);
 
 CREATE INDEX IF NOT EXISTS ix_inventory_sku ON inventory (sku);
@@ -331,3 +435,7 @@ CREATE INDEX IF NOT EXISTS ix_order_lines_sku ON order_lines (sku);
 CREATE INDEX IF NOT EXISTS ix_orders_ship ON outbound_orders (dc_id, ship_date);
 
 CREATE INDEX IF NOT EXISTS ix_pick_tasks_wave ON pick_tasks (wave_id);
+
+CREATE INDEX IF NOT EXISTS ix_route_stops_ship ON route_stops (dc_id, ship_date);
+
+CREATE INDEX IF NOT EXISTS ix_geofence_events_time ON geofence_events (dc_id, event_time);

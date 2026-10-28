@@ -1,0 +1,141 @@
+# MCP Toolbox for Databases config for Cloud SQL for PostgreSQL: the database the
+# "Spec-Driven ADK Agent Development with Antigravity and Spec-kit" codelab provisions
+# (scripts/setup_database.sh in sdd-adk-agents-agy). Load the WMS tables into it first:
+#   WMS_DB_BACKEND=cloudsql CLOUD_SQL_INSTANCE=$GOOGLE_CLOUD_PROJECT:us-central1:restaurant-db \
+#   DB_PASSWORD=... python -m warehouse_data.load_postgres --target cloudsql --drop --create-db
+# Run:  toolbox --tools-file toolbox/tools.cloudsql.yaml        (MCP on http://127.0.0.1:5000)
+# Generated from toolbox/tools.yaml; keep the two in step.
+
+sources:
+  wms-cloudsql:
+    kind: cloud-sql-postgres
+    project: ${GOOGLE_CLOUD_PROJECT}
+    region: us-central1
+    instance: restaurant-db   # the codelab's instance; change if yours differs
+    database: wms
+    user: postgres
+    password: ${DB_PASSWORD}
+
+tools:
+  expiring-inventory:
+    kind: postgres-sql
+    source: wms-cloudsql
+    description: Lots at a DC that are expired or expire on or before a date (FEFO / shrink risk).
+    parameters:
+      - name: dc_id
+        type: string
+        description: DC code such as MTX, MGA, MCA, MNY, FDL or FOH.
+      - name: through_date
+        type: string
+        description: Last expiry date to include, YYYY-MM-DD.
+    statement: |
+      SELECT v.dc_id, v.sku, i.description, i.temp_zone, v.location_id, v.lot_number, v.expiry_date,
+             v.qty_on_hand, v.qty_on_hand * i.unit_cost AS value_usd
+      FROM inventory v JOIN items i ON i.sku = v.sku
+      WHERE v.dc_id = $1 AND v.expiry_date <= $2::date AND v.qty_on_hand > 0
+      ORDER BY v.expiry_date
+      LIMIT 100;
+
+  pick-faces-below-min:
+    kind: postgres-sql
+    source: wms-cloudsql
+    description: Pick faces at a DC whose available quantity is below the slot's replenishment minimum.
+    parameters:
+      - name: dc_id
+        type: string
+        description: DC code.
+    statement: |
+      SELECT s.location_id, s.sku, i.description, s.min_qty, s.max_qty, COALESCE(SUM(v.qty_on_hand), 0) AS face_qty
+      FROM slot_assignments s
+      JOIN items i ON i.sku = s.sku
+      LEFT JOIN inventory v ON v.location_id = s.location_id AND v.sku = s.sku AND v.status = 'AVAILABLE'
+      WHERE s.dc_id = $1
+      GROUP BY s.location_id, s.sku, i.description, s.min_qty, s.max_qty
+      HAVING COALESCE(SUM(v.qty_on_hand), 0) < s.min_qty
+      ORDER BY face_qty
+      LIMIT 50;
+
+  dock-appointments-today:
+    kind: postgres-sql
+    source: wms-cloudsql
+    description: Dock appointments at a DC for one day with door, carrier, temperature zone and status.
+    parameters:
+      - name: dc_id
+        type: string
+        description: DC code.
+      - name: day
+        type: string
+        description: Day, YYYY-MM-DD.
+    statement: |
+      SELECT a.appointment_id, a.door_id, d.temp_capable, a.direction, a.carrier, a.reference_id, a.temp_zone,
+             a.scheduled_start, a.actual_arrival, a.status
+      FROM dock_appointments a JOIN dock_doors d ON d.door_id = a.door_id
+      WHERE a.dc_id = $1 AND a.scheduled_start >= $2::date AND a.scheduled_start < $2::date + 1
+      ORDER BY a.scheduled_start;
+
+  otd-by-segment:
+    kind: postgres-sql
+    source: wms-cloudsql
+    description: On-time delivery (OTD) by DC and segment (RETAIL vs RESTAURANT) for delivered stops between two ship dates. A stop is on time when the truck entered the customer geofence by the end of the receiving window.
+    parameters:
+      - name: start_date
+        type: string
+        description: First ship date, YYYY-MM-DD.
+      - name: end_date
+        type: string
+        description: Last ship date, YYYY-MM-DD.
+    statement: |
+      SELECT dc_id, segment, COUNT(*) AS stops, SUM(on_time) AS on_time,
+             100.0 * SUM(on_time) / COUNT(*) AS otd_pct,
+             SUM(CASE WHEN late_reason = 'LATE_DEPARTURE' THEN 1 ELSE 0 END) AS late_departure,
+             SUM(CASE WHEN late_reason = 'CUSTOMER_DWELL' THEN 1 ELSE 0 END) AS customer_dwell,
+             SUM(CASE WHEN late_reason = 'TRAFFIC' THEN 1 ELSE 0 END) AS traffic
+      FROM route_stops
+      WHERE on_time IS NOT NULL AND ship_date BETWEEN $1::date AND $2::date
+      GROUP BY dc_id, segment
+      ORDER BY otd_pct;
+
+  inbound-yard-dwell-by-carrier:
+    kind: postgres-sql
+    source: wms-cloudsql
+    description: Average inbound trailer dwell in the DC yard (geofence gate-in to gate-out, minutes) by carrier for a DC since a date.
+    parameters:
+      - name: dc_id
+        type: string
+        description: DC code.
+      - name: since
+        type: string
+        description: First day to include, YYYY-MM-DD.
+    statement: |
+      SELECT i.carrier, COUNT(*) AS visits,
+             AVG(EXTRACT(EPOCH FROM (o.event_time - i.event_time)) / 60) AS avg_dwell_min
+      FROM geofence_events i
+      JOIN geofence_events o ON o.reference_id = i.reference_id AND o.site_type = 'DC_YARD' AND o.event_type = 'EXIT'
+      WHERE i.site_type = 'DC_YARD' AND i.event_type = 'ENTER' AND i.reference_type = 'APPOINTMENT'
+            AND i.dc_id = $1 AND i.event_time >= $2::date
+      GROUP BY i.carrier
+      ORDER BY avg_dwell_min DESC;
+
+  pcmiler-lane-miles:
+    kind: postgres-sql
+    source: wms-cloudsql
+    description: PC*MILER practical / shortest miles and drive minutes between two sites (DC code or customer id).
+    parameters:
+      - name: origin_id
+        type: string
+        description: Origin DC code or customer id.
+      - name: dest_id
+        type: string
+        description: Destination DC code or customer id.
+    statement: |
+      SELECT origin_id, dest_id, practical_miles, shortest_miles, drive_minutes, source, computed_date
+      FROM lane_miles WHERE origin_id = $1 AND dest_id = $2;
+
+toolsets:
+  warehouse:
+    - expiring-inventory
+    - pick-faces-below-min
+    - dock-appointments-today
+    - otd-by-segment
+    - inbound-yard-dwell-by-carrier
+    - pcmiler-lane-miles

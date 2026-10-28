@@ -7,8 +7,9 @@ answers differently each run, but the facts must match these.
 
 ## Setup (before the demo)
 ```bash
-make data            # synthetic data -> data/wms.db
-adk web .            # http://localhost:8000, pick warehouse_agent
+uv sync              # Python 3.12 + dependencies
+uv run make data     # synthetic data -> data/wms.db (also generated on first use)
+uv run adk web .     # http://localhost:8000, pick warehouse_agent
 ```
 Or open the agent in Gemini Enterprise after `deploy/deploy_agent_engine.sh` and
 `deploy/register_gemini_enterprise.sh` (BigQuery backend).
@@ -29,6 +30,9 @@ Expected facts (parallel collectors -> briefing writer):
   dry door (MTX-IB01), 1 double-booked door (MTX-IB08 at 11:15).
 - Inventory: CRITICAL replenishments, 3 expiring lots in 2 days, stockout risk on SKUs that are on
   the late trailer.
+- Delivery: MTX retail OTD 90.9% this week (91.5% prior); route MTX-R07 at 55.3% (TRAFFIC); trucks
+  on the road now with stops projected late; yard geofence shows Swift Haul trailer APMTX00078
+  inside the yard 4 hours early and not checked in, and Lonestar yard dwell up 59 minutes this week.
 
 ## Beat 2 (30 s): supervisor copilot
 > **Why are we behind in the cooler?**
@@ -50,6 +54,8 @@ and the re-plan writer produces:
   (27): **497 cases at risk across 74 order lines**.
 - Night crew is 2 pickers; waves WMTX00059 (cutoff 04:00) and WMTX00060 (cutoff 05:30) need a
   crew of 3 and 5 to finish inside the night shift.
+- Customer impact (`assess_route_otd_risk`): with 2 pickers, routes MTX-R07 to R12 leave late and
+  **41 of 86 retail stops miss their receiving window tomorrow** (projected OTD 52.3%).
 
 **Re-plan (each step with gain and approver)**
 1. Door APMTX00063 now at MTX-IB02 (free 10:30-11:30), receive the 3 critical SKUs first and put
@@ -75,6 +81,7 @@ and the re-plan writer produces:
 | Trailers in detention | 1 | 0 | freezer trailer doored now |
 | Cold loads on ambient doors | 1 | 0 | appointment moved |
 | Overtime cost | $0 | about $192 | 6 h at about $32/h |
+| Customer stops missing their window | 41 of 86 (OTD 52.3%) | 0 (OTD 100%) | waves crewed like 5 pickers, PC*MILER drive times |
 
 > **Propose those actions.**  then  **Approve the door change for APMTX00063.**
 
@@ -100,9 +107,35 @@ Expected: scorecard for 6 DCs (Manhattan Active, Blue Yonder, Argent); Blue Yond
 errors at MCA/MNY on the ORDER_RELEASE / ITEM_MASTER interfaces; field mapping example:
 "What is EXPIRE_DTE in Blue Yonder?" -> `inventory.expiry_date`.
 
+## Beat 6 (45 s): McLane delivery view (OTD, dwell, geofence, PC*MILER)
+> **Why is restaurant OTD down at FDL?**
+
+Expected (`delivery_otd_agent`, `get_otd_performance`): FDL restaurant OTD **68.0% this week vs
+86.9% last week**; 144 of the late stops are LATE_DEPARTURE (trailers leaving after late waves), 20
+CUSTOMER_DWELL. Network-wide this week: Retail 93.0%, Restaurant 78.4%. Next action: release FDL
+waves earliest-deadline-first and crew them to cutoff (approver: shift supervisor), and send updated
+ETAs to restaurants on late trucks (NOTIFY_CUSTOMER, transportation manager).
+
+> **Is dwell time going up anywhere?**
+
+Expected (`get_dwell_time_changes`): Lonestar Logistics at MTX, inbound yard dwell **120 -> 179 min
+(+59)**, driven by gate-to-door wait (+33) and door-to-gate (+29); Taco Trail restaurants served by
+FDL, stop dwell **37 -> 59 min** against a 36-minute standard, OTD 70.5%.
+
+> **How many PC*MILER miles is route MTX-R07 tomorrow, and why is it always late?**
+
+Expected: 319.8 practical miles, 7.9 drive hours (source PCMILER_SYNTH; live PC*MILER when
+`PCMILER_API_KEY` is set); OTD 55.3% this week, late reason TRAFFIC: drive time runs about 28% over
+PC*MILER (work zone), so the fix is a re-plan of the stop sequence or an earlier departure
+(RESEQUENCE_ROUTE, transportation manager).
+
 ## Backup questions
 - "Where is the order for Burger Barn at FDL?" (lookup_order)
 - "Which trailers will be late this afternoon?" (predict_dock_arrivals)
 - "Which SKUs are ordered together but slotted far apart?" (get_sku_affinity)
 - "Top 5 SKUs by short cases last week across all DCs, as SQL." (data_analyst_agent)
 - Upload a photo of a crushed case: "Should we ship this?" (multimodal damage check -> HOLD proposal)
+- "Which trucks are in the MTX yard right now?" (get_geofence_activity: 7 trailers, detention risk
+  on the Coldline freezer trailer, Swift Haul in the yard but not checked in)
+- "Where is Taco Trail #2084 and when do they take deliveries?" (lookup_customer_site: geofence 90 m,
+  window 08:30-09:30, 36.5 PC*MILER miles from FDL)
