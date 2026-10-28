@@ -30,7 +30,7 @@ BigQuery or AlloyDB.
 ## Project Structure
 ```
 warehouse_agent/      agent.py, prompts.py, config.py, db.py, schema.py, tools/<domain>.py
-warehouse_data/       generate.py, load_sqlite.py, load_bigquery.py, load_alloydb.py
+warehouse_data/       generate.py, load_sqlite.py, load_bigquery.py, load_postgres.py (+ load_alloydb.py alias)
 tests/                test_data.py, test_tools.py, test_portability.py, test_agent_flow.py
 deploy/               setup_gcp.sh, setup_alloydb.sh, deploy_agent_engine.sh, register_gemini_enterprise.sh
 toolbox/tools.yaml    optional MCP Toolbox configuration

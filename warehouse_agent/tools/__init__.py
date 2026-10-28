@@ -2,6 +2,8 @@
 
 from .actions import decide_action, list_actions, propose_action
 from .analytics import describe_data_model, run_readonly_sql
+from .delivery import (assess_route_otd_risk, get_dwell_time_changes, get_geofence_activity, get_otd_performance,
+                       get_route_miles, get_route_status, lookup_customer_site)
 from .dock import (assess_inbound_impact, get_dock_exceptions, get_dock_schedule, get_door_utilization,
                                         predict_dock_arrivals, recommend_door)
 from .fulfillment import (diagnose_zone_backlog, get_order_fulfillment_summary, get_short_picks, get_wave_progress,
@@ -22,8 +24,10 @@ LABOR_TOOLS = [get_labor_productivity, forecast_labor_requirement, get_shift_ros
 DOCK_TOOLS = [get_dock_schedule, get_dock_exceptions, predict_dock_arrivals, assess_inbound_impact, recommend_door,
               get_door_utilization]
 INTEGRATION_TOOLS = [get_wms_landscape, get_integration_health, lookup_field_mapping, compare_dc_kpis]
+DELIVERY_TOOLS = [get_otd_performance, get_route_status, assess_route_otd_risk, get_dwell_time_changes,
+                  get_geofence_activity, get_route_miles, lookup_customer_site]
 ANALYTICS_TOOLS = [describe_data_model, run_readonly_sql]
 ACTION_TOOLS = [propose_action, decide_action, list_actions]
 
-ALL_TOOLS = (INVENTORY_TOOLS + SLOTTING_TOOLS + FULFILLMENT_TOOLS + LABOR_TOOLS + DOCK_TOOLS + INTEGRATION_TOOLS
-             + ANALYTICS_TOOLS + ACTION_TOOLS)
+ALL_TOOLS = (INVENTORY_TOOLS + SLOTTING_TOOLS + FULFILLMENT_TOOLS + LABOR_TOOLS + DOCK_TOOLS + DELIVERY_TOOLS
+             + INTEGRATION_TOOLS + ANALYTICS_TOOLS + ACTION_TOOLS)

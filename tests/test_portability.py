@@ -63,10 +63,15 @@ CALLS = [
     ("lookup_field_mapping", dict(term="sku")), ("compare_dc_kpis", {}), ("describe_data_model", {}),
     ("run_readonly_sql", dict(sql="SELECT dc_id, COUNT(*) AS n FROM inventory GROUP BY dc_id")),
     ("list_actions", {}),
+    ("get_otd_performance", dict(dc_id="FDL", group_by="chain")), ("get_otd_performance", {}),
+    ("get_route_status", dict(dc_id="MTX", route_id="MTX-R07")), ("assess_route_otd_risk", dict(dc_id="MTX")),
+    ("get_dwell_time_changes", {}), ("get_geofence_activity", dict(dc_id="MTX")),
+    ("get_route_miles", dict(dc_id="FDL", route_id="FDL-R03")), ("get_route_miles", dict(dc_id="FDL", customer_id="CFDL0023")),
+    ("lookup_customer_site", dict(customer="Taco Trail")),
 ]
 
 
-@pytest.mark.parametrize("name,kwargs", CALLS, ids=[c[0] for c in CALLS])
+@pytest.mark.parametrize("name,kwargs", CALLS, ids=[f"{c[0]}-{i}" for i, c in enumerate(CALLS)])
 def test_tool_sql_is_portable(duck, name, kwargs):
     res = getattr(T, name)(**kwargs)
     assert res["status"] == "success", res

@@ -1,8 +1,8 @@
 """Backend-agnostic data access for the warehouse agents.
 
 Tools write SQL once, in a small portable subset, and this module runs it on
-SQLite (local), BigQuery or AlloyDB (PostgreSQL). Conventions every query
-follows so it runs unchanged on all three:
+SQLite (local), BigQuery, or PostgreSQL (AlloyDB, Cloud SQL or any Postgres).
+Conventions every query follows so it runs unchanged on all of them:
 
   * Table names are written as `{table}` placeholders and qualified here.
   * Parameters are written as `:name` and bound here (BigQuery gets `@name`).
@@ -10,7 +10,8 @@ follows so it runs unchanged on all three:
     and pass them as parameters. Use `x * 1.0` for float division.
   * No ROUND() in SQL (PostgreSQL rejects ROUND(double, int)); round in Python.
 
-Select the backend with WMS_DB_BACKEND = sqlite | bigquery | alloydb.
+Select the backend with WMS_DB_BACKEND = sqlite | bigquery | alloydb | cloudsql | postgres.
+With sqlite, a missing database is generated on first use (WMS_AUTO_GENERATE=false to turn off).
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ class SQLiteBackend(Backend):
         if not Path(path).exists():
             raise FileNotFoundError(
                 f"SQLite database {path} not found. Run `make data` "
-                "(python -m warehouse_data.load_sqlite) first.")
+                "(python -m warehouse_data.load_sqlite --generate) first.")
 
     def _conn(self):
         conn = sqlite3.connect(self.path)
@@ -132,41 +133,56 @@ class BigQueryBackend(Backend):
         self._run(sql, params)
 
 
-class AlloyDBBackend(Backend):
-    """AlloyDB for PostgreSQL via pg8000.
+class PostgresBackend(Backend):
+    """PostgreSQL via pg8000: AlloyDB, Cloud SQL for PostgreSQL, or any Postgres host.
 
-    Connects through the AlloyDB Python Connector when ALLOYDB_INSTANCE_URI is
-    set (IAM-authorized, no IP allowlisting), otherwise directly to
-    ALLOYDB_HOST:ALLOYDB_PORT (for example through the AlloyDB Auth Proxy).
+    kind="alloydb":  AlloyDB Python Connector when ALLOYDB_INSTANCE_URI is set (IAM-authorized, no IP
+                     allowlisting), else ALLOYDB_HOST:ALLOYDB_PORT (e.g. the AlloyDB Auth Proxy).
+                     ALLOYDB_USER / ALLOYDB_PASSWORD / ALLOYDB_DATABASE.
+    kind="cloudsql": Cloud SQL Python Connector when CLOUD_SQL_INSTANCE (project:region:instance) is set,
+                     else POSTGRES_HOST:POSTGRES_PORT (e.g. the Cloud SQL Auth Proxy). This is the database
+                     the sdd-adk-antigravity codelab provisions.
+    kind="postgres": POSTGRES_HOST:POSTGRES_PORT directly.
+    Cloud SQL / Postgres credentials: POSTGRES_USER (default postgres), POSTGRES_PASSWORD (or DB_PASSWORD,
+    as in the codelab's setup script) and POSTGRES_DB (default wms).
     """
 
-    name = "alloydb"
-    dialect = "PostgreSQL (AlloyDB)"
+    dialect = "PostgreSQL"
 
-    def __init__(self, database: str | None = None):
+    def __init__(self, kind: str = "postgres", database: str | None = None):
         import pg8000.dbapi  # lazy import
 
         pg8000.dbapi.paramstyle = "named"
         self.pg = pg8000
-        self.user = os.environ.get("ALLOYDB_USER", "postgres")
-        self.password = os.environ.get("ALLOYDB_PASSWORD", "")
-        self.database = database or os.environ.get("ALLOYDB_DATABASE", "wms")
-        self.instance_uri = os.environ.get("ALLOYDB_INSTANCE_URI")
+        self.name = kind
+        env = os.environ.get
+        if kind == "alloydb":
+            self.dialect = "PostgreSQL (AlloyDB)"
+            self.user, self.password = env("ALLOYDB_USER", "postgres"), env("ALLOYDB_PASSWORD", "")
+            self.database = database or env("ALLOYDB_DATABASE", "wms")
+            self.instance = env("ALLOYDB_INSTANCE_URI")
+            self.host, self.port = env("ALLOYDB_HOST", "127.0.0.1"), int(env("ALLOYDB_PORT", "5432"))
+        else:
+            self.dialect = "PostgreSQL (Cloud SQL)" if kind == "cloudsql" else "PostgreSQL"
+            self.user = env("POSTGRES_USER", "postgres")
+            self.password = env("POSTGRES_PASSWORD") or env("DB_PASSWORD", "")
+            self.database = database or env("POSTGRES_DB", "wms")
+            self.instance = env("CLOUD_SQL_INSTANCE") if kind == "cloudsql" else None
+            self.host, self.port = env("POSTGRES_HOST", "127.0.0.1"), int(env("POSTGRES_PORT", "5432"))
         self._connector = None
 
     def _conn(self):
-        if self.instance_uri:
+        if self.instance:
             if self._connector is None:
-                from google.cloud.alloydb.connector import Connector
-
+                if self.name == "alloydb":
+                    from google.cloud.alloydb.connector import Connector
+                else:
+                    from google.cloud.sql.connector import Connector
                 self._connector = Connector()
-            conn = self._connector.connect(self.instance_uri, "pg8000", user=self.user, password=self.password,
+            return self._connector.connect(self.instance, "pg8000", user=self.user, password=self.password,
                                            db=self.database)
-        else:
-            conn = self.pg.dbapi.connect(user=self.user, password=self.password, database=self.database,
-                                         host=os.environ.get("ALLOYDB_HOST", "127.0.0.1"),
-                                         port=int(os.environ.get("ALLOYDB_PORT", "5432")))
-        return conn
+        return self.pg.dbapi.connect(user=self.user, password=self.password, database=self.database,
+                                     host=self.host, port=self.port)
 
     def _cursor(self, conn):
         cur = conn.cursor()
@@ -193,6 +209,24 @@ class AlloyDBBackend(Backend):
             conn.close()
 
 
+class AlloyDBBackend(PostgresBackend):
+    """Backward-compatible name for PostgresBackend(kind="alloydb")."""
+
+    def __init__(self, database: str | None = None):
+        super().__init__("alloydb", database)
+
+
+def _ensure_sqlite(path: str) -> None:
+    """Generate the synthetic dataset on first use (local dev, a fresh Antigravity / codelab clone)."""
+    if Path(path).exists() or os.environ.get("WMS_AUTO_GENERATE", "true").lower() in ("0", "false", "no"):
+        return
+    try:
+        from warehouse_data.load_sqlite import build_sqlite
+    except ImportError:  # agent folder copied without warehouse_data/
+        return
+    build_sqlite(Path(path))
+
+
 def default_sqlite_path() -> str:
     return os.environ.get("WMS_SQLITE_PATH", str(Path(__file__).resolve().parent.parent / "data" / "wms.db"))
 
@@ -206,10 +240,12 @@ def get_backend() -> Backend:
                 _backend = BigQueryBackend(os.environ["GOOGLE_CLOUD_PROJECT"],
                                            os.environ.get("WMS_BQ_DATASET", "mclane_wms"),
                                            os.environ.get("WMS_BQ_LOCATION", "US"))
-            elif kind == "alloydb":
-                _backend = AlloyDBBackend()
+            elif kind in ("alloydb", "cloudsql", "postgres"):
+                _backend = PostgresBackend(kind)
             else:
-                _backend = SQLiteBackend(default_sqlite_path())
+                path = default_sqlite_path()
+                _ensure_sqlite(path)
+                _backend = SQLiteBackend(path)
         return _backend
 
 

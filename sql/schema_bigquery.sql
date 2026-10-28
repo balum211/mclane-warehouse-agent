@@ -7,7 +7,9 @@ CREATE TABLE IF NOT EXISTS `mclane_wms.distribution_centers` (
   segment STRING OPTIONS(description="RETAIL (convenience/grocery) or RESTAURANT (foodservice/QSR)"),
   wms_system STRING OPTIONS(description="MANHATTAN_ACTIVE | BLUE_YONDER | ARGENT"),
   square_feet INT64,
-  timezone STRING OPTIONS(description="IANA timezone")
+  timezone STRING OPTIONS(description="IANA timezone"),
+  latitude FLOAT64 OPTIONS(description="DC yard gate latitude (WGS84)"),
+  longitude FLOAT64 OPTIONS(description="DC yard gate longitude (WGS84)")
 );
 
 CREATE TABLE IF NOT EXISTS `mclane_wms.items` (
@@ -33,7 +35,12 @@ CREATE TABLE IF NOT EXISTS `mclane_wms.customers` (
   dc_id STRING OPTIONS(description="Servicing DC"),
   route_id STRING OPTIONS(description="Delivery route"),
   city STRING,
-  state STRING
+  state STRING,
+  latitude FLOAT64 OPTIONS(description="Delivery point latitude (WGS84)"),
+  longitude FLOAT64 OPTIONS(description="Delivery point longitude (WGS84)"),
+  delivery_window_start STRING OPTIONS(description="Receiving window start HH:MM local (restaurant 60 min, retail 120 min)"),
+  delivery_window_end STRING OPTIONS(description="Receiving window end HH:MM local"),
+  standard_dwell_minutes INT64 OPTIONS(description="Planned on-site time (unload, check-in, put-away for restaurants)")
 )
 CLUSTER BY dc_id;
 
@@ -271,11 +278,98 @@ CREATE TABLE IF NOT EXISTS `mclane_wms.wms_field_map` (
   transform_rule STRING
 );
 
+CREATE TABLE IF NOT EXISTS `mclane_wms.geofences` (
+  geofence_id STRING OPTIONS(description="GF-<site id>"),
+  dc_id STRING OPTIONS(description="Owning / servicing DC"),
+  site_type STRING OPTIONS(description="DC_YARD | CUSTOMER"),
+  site_id STRING OPTIONS(description="dc_id or customer_id"),
+  name STRING,
+  latitude FLOAT64 OPTIONS(description="Circle center"),
+  longitude FLOAT64 OPTIONS(description="Circle center"),
+  radius_m INT64 OPTIONS(description="Circle radius in meters")
+)
+CLUSTER BY dc_id;
+
+CREATE TABLE IF NOT EXISTS `mclane_wms.geofence_events` (
+  event_id STRING OPTIONS(description="Telematics event id"),
+  dc_id STRING,
+  geofence_id STRING,
+  site_type STRING OPTIONS(description="DC_YARD | CUSTOMER"),
+  site_id STRING OPTIONS(description="dc_id or customer_id"),
+  asset_id STRING OPTIONS(description="Trailer / tractor id from the telematics unit"),
+  carrier STRING,
+  reference_type STRING OPTIONS(description="APPOINTMENT (inbound trailer) | TRIP (McLane route)"),
+  reference_id STRING OPTIONS(description="appointment_id or trip_id"),
+  event_type STRING OPTIONS(description="ENTER | EXIT"),
+  event_time DATETIME OPTIONS(description="Local time"),
+  latitude FLOAT64 OPTIONS(description="Ping position"),
+  longitude FLOAT64 OPTIONS(description="Ping position")
+)
+CLUSTER BY dc_id;
+
+CREATE TABLE IF NOT EXISTS `mclane_wms.lane_miles` (
+  origin_id STRING OPTIONS(description="dc_id or customer_id"),
+  dest_id STRING OPTIONS(description="dc_id or customer_id"),
+  dc_id STRING,
+  practical_miles FLOAT64 OPTIONS(description="PC*MILER practical route miles (truck)"),
+  shortest_miles FLOAT64 OPTIONS(description="PC*MILER shortest route miles"),
+  drive_minutes INT64 OPTIONS(description="PC*MILER drive time"),
+  source STRING OPTIONS(description="PCMILER_SYNTH (demo) | PCMILER_API | PCMILER_BATCH"),
+  computed_date DATE
+)
+CLUSTER BY dc_id;
+
+CREATE TABLE IF NOT EXISTS `mclane_wms.route_trips` (
+  trip_id STRING OPTIONS(description="One trailer run of a route on a ship date"),
+  dc_id STRING,
+  route_id STRING,
+  ship_date DATE,
+  segment STRING OPTIONS(description="RETAIL | RESTAURANT"),
+  tractor_id STRING,
+  planned_departure DATETIME,
+  actual_departure DATETIME OPTIONS(description="DC yard geofence EXIT; NULL = not departed"),
+  departure_delay_minutes INT64,
+  delay_reason STRING OPTIONS(description="NULL | LATE_WAVE | LATE_LOAD | DRIVER | EQUIPMENT"),
+  planned_miles FLOAT64 OPTIONS(description="PC*MILER practical miles, DC -> stops -> DC"),
+  actual_miles FLOAT64 OPTIONS(description="Odometer / telematics miles"),
+  stops_planned INT64,
+  stops_completed INT64,
+  returned_at DATETIME OPTIONS(description="DC yard geofence ENTER on return"),
+  status STRING OPTIONS(description="PLANNED | IN_TRANSIT | COMPLETED")
+)
+CLUSTER BY dc_id;
+
+CREATE TABLE IF NOT EXISTS `mclane_wms.route_stops` (
+  stop_id STRING,
+  trip_id STRING,
+  dc_id STRING,
+  route_id STRING,
+  ship_date DATE,
+  stop_seq INT64,
+  customer_id STRING,
+  segment STRING OPTIONS(description="RETAIL | RESTAURANT"),
+  order_id STRING,
+  miles_from_prev FLOAT64 OPTIONS(description="PC*MILER practical miles from the previous stop (or DC)"),
+  window_start DATETIME OPTIONS(description="Customer receiving window"),
+  window_end DATETIME,
+  planned_arrival DATETIME,
+  eta DATETIME OPTIONS(description="Telematics ETA for stops not reached yet"),
+  actual_arrival DATETIME OPTIONS(description="Customer geofence ENTER"),
+  actual_departure DATETIME OPTIONS(description="Customer geofence EXIT"),
+  dwell_minutes INT64 OPTIONS(description="actual_departure - actual_arrival"),
+  standard_dwell_minutes INT64,
+  on_time INT64 OPTIONS(description="1 = arrived by window_end (OTD); NULL until delivered"),
+  late_minutes INT64,
+  late_reason STRING OPTIONS(description="NULL | LATE_DEPARTURE | CUSTOMER_DWELL | TRAFFIC | ROUTE_PLAN"),
+  status STRING OPTIONS(description="PLANNED | EN_ROUTE | AT_STOP | DELIVERED")
+)
+CLUSTER BY dc_id;
+
 CREATE TABLE IF NOT EXISTS `mclane_wms.agent_actions` (
   action_id STRING,
   created_at DATETIME,
   dc_id STRING,
-  action_type STRING OPTIONS(description="REPLENISH | RESLOT | REASSIGN_DOOR | RELEASE_WAVE | REBALANCE_LABOR | CYCLE_COUNT | OTHER"),
+  action_type STRING OPTIONS(description="REPLENISH | RESLOT | REASSIGN_DOOR | RELEASE_WAVE | REBALANCE_LABOR | CYCLE_COUNT | RESEQUENCE_ROUTE | NOTIFY_CUSTOMER | OTHER"),
   details STRING OPTIONS(description="JSON payload"),
   rationale STRING,
   status STRING OPTIONS(description="PROPOSED | APPROVED | REJECTED"),

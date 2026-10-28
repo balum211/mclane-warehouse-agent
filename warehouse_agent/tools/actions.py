@@ -9,7 +9,8 @@ import uuid
 from .. import db
 from .common import error, now, ok
 
-ACTION_TYPES = {"REPLENISH", "RESLOT", "REASSIGN_DOOR", "RELEASE_WAVE", "REBALANCE_LABOR", "CYCLE_COUNT", "OTHER"}
+ACTION_TYPES = {"REPLENISH", "RESLOT", "REASSIGN_DOOR", "RELEASE_WAVE", "REBALANCE_LABOR", "CYCLE_COUNT",
+                "RESEQUENCE_ROUTE", "NOTIFY_CUSTOMER", "OTHER"}
 # Who must approve each kind of change before it is written back to the WMS.
 APPROVER = {
     "REPLENISH": "Inventory control lead",
@@ -18,6 +19,8 @@ APPROVER = {
     "REASSIGN_DOOR": "Dock / yard lead",
     "RELEASE_WAVE": "Shift supervisor",
     "REBALANCE_LABOR": "Shift supervisor (DC manager if overtime)",
+    "RESEQUENCE_ROUTE": "Transportation / routing manager",
+    "NOTIFY_CUSTOMER": "Transportation / routing manager",
     "OTHER": "DC operations manager",
 }
 
@@ -29,7 +32,8 @@ def propose_action(action_type: str, dc_id: str, summary: str, rationale: str, e
     Never claim the change is done: tell the user it is proposed and ask them to approve or reject it.
 
     Args:
-        action_type: REPLENISH, RESLOT, REASSIGN_DOOR, RELEASE_WAVE, REBALANCE_LABOR, CYCLE_COUNT or OTHER.
+        action_type: REPLENISH, RESLOT, REASSIGN_DOOR, RELEASE_WAVE, REBALANCE_LABOR, CYCLE_COUNT,
+            RESEQUENCE_ROUTE (stop order / departure), NOTIFY_CUSTOMER (late-delivery ETA) or OTHER.
         dc_id: DC code the action applies to.
         summary: One-line description, e.g. "Move SKU 100245 from MTX-D07-18-1 to MTX-D01-02-2".
         rationale: Why, with the numbers that justify it.

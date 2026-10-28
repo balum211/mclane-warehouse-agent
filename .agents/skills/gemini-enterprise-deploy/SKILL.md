@@ -7,16 +7,18 @@ description: Use when deploying the McLane warehouse agent to Vertex AI Agent En
 
 ## Preconditions
 - `gcloud auth login` and `gcloud auth application-default login` done; project selected.
-- Data in BigQuery (`bash deploy/setup_gcp.sh`) or AlloyDB (`bash deploy/setup_alloydb.sh`).
+- Data in BigQuery (`bash deploy/setup_gcp.sh`), AlloyDB (`bash deploy/setup_alloydb.sh`) or Cloud SQL
+  for PostgreSQL (`bash deploy/setup_cloudsql.sh`).
   The deployed agent cannot use SQLite.
 - `warehouse_agent/.env` created from `.env.example` with `GOOGLE_GENAI_USE_VERTEXAI=True`,
   `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `WMS_DB_BACKEND=bigquery` (or `alloydb` +
-  `ALLOYDB_*`), and `WMS_AGENT_MODEL`.
+  `ALLOYDB_*`, or `cloudsql` + `CLOUD_SQL_INSTANCE` / `DB_PASSWORD`), and `WMS_AGENT_MODEL`. Optional
+  `PCMILER_API_KEY` for live PC*MILER miles (store it in Secret Manager for production).
 
 ## Steps
 1. `make test` must pass.
 2. `bash deploy/deploy_agent_engine.sh` (wraps `adk deploy agent_engine ... warehouse_agent` and
-   grants the Agent Engine service agent BigQuery job/data roles and AlloyDB client). Note the
+   grants the Agent Engine service agent BigQuery job/data roles, AlloyDB client and Cloud SQL client). Note the
    `projects/.../reasoningEngines/...` resource name it prints.
 3. Smoke test in the Vertex AI console (Agent Engine > the agent > Playground): "Give me the shift
    briefing for MTX".

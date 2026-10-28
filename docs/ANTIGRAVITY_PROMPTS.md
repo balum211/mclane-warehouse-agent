@@ -12,9 +12,13 @@ artifact rather than re-prompting for document-wide changes.
 **Working agreements for every session**
 - Use **Planning** mode for anything that changes more than one file; **Fast** mode for one-liners.
 - Terminal policy: "Request review" for `gcloud`, `bq`, `adk deploy`; auto-run is fine for `make test`.
-- The repo already contains `AGENTS.md`, `.agents/rules/project-context.md`, five skills in
-  `.agents/skills/`, a spec-kit constitution and feature spec `specs/001-warehouse-ops-copilot/`.
-  The agent reads these automatically, so prompts stay short.
+- The repo already contains `AGENTS.md`, `.agents/rules/project-context.md`, six skills in
+  `.agents/skills/`, a spec-kit constitution and feature specs `specs/001-warehouse-ops-copilot/`
+  and `specs/002-delivery-otd-geofence/`. The agent reads these automatically, so prompts stay short.
+- Layout matches the sdd-adk-antigravity codelab starter: Python 3.12 with `uv`, the agent folder
+  (`warehouse_agent/`, with its own `.env`) at the repo root next to `server.py`, `uv run adk web .`
+  to run it, `.agents/{rules,skills,workflows}` and `.specify/`. To drop this agent into your
+  `sdd-adk-agents-agy` project instead, follow [SDD_ADK_AGENTS_AGY.md](SDD_ADK_AGENTS_AGY.md).
 
 ---
 
@@ -24,32 +28,39 @@ Open the cloned `mclane-warehouse-agent` folder as the Antigravity workspace, th
 
 ```text
 Set up this workspace for local development and verify it works. Steps:
-1. Create a Python 3.11+ virtual environment with uv and install the project with the dev extra.
-2. Copy .env.example to warehouse_agent/.env. Set GOOGLE_CLOUD_PROJECT={{PROJECT_ID}} and keep
-   WMS_DB_BACKEND=sqlite.
-3. Run `make data` to generate the synthetic WMS dataset and `make test`.
-4. Start `adk web .` and, in the browser, open the warehouse_agent app and ask
-   "Give me the shift briefing for MTX". Capture a screenshot in the walkthrough.
+1. Run `uv sync` (Python 3.12 from .python-version; the dev group with pytest is included).
+2. Copy .env.example to warehouse_agent/.env. Set GOOGLE_CLOUD_PROJECT={{PROJECT_ID}},
+   GOOGLE_CLOUD_LOCATION=global, GOOGLE_GENAI_USE_VERTEXAI=True and keep WMS_DB_BACKEND=sqlite.
+3. Run `uv run make data` to generate the synthetic WMS and delivery dataset, then `uv run make test`.
+4. Start `uv run adk web .` and, in the browser, open the warehouse_agent app and ask
+   "Give me the shift briefing for MTX", then "Why is restaurant OTD down at FDL?". Capture
+   screenshots in the walkthrough.
 Stop and ask me if gcloud authentication is needed; don't print credentials.
 ```
 
 ## 1. MCP servers (ADK docs for grounding)
 
-Add to Antigravity's MCP config (Agent panel > MCP Servers > Manage > View raw config):
+Antigravity reads MCP servers from `$HOME/.gemini/config/mcp_config.json` (open it from
+Settings > Customizations > Installed MCP Servers > Open MCP Config). Merge in the `adk-docs-mcp`
+entry from [`mcp_config.example.json`](../mcp_config.example.json), the same server the
+sdd-adk-antigravity codelab uses:
 
 ```json
 {
   "mcpServers": {
-    "adk-docs": {
+    "adk-docs-mcp": {
       "command": "uvx",
-      "args": ["--from", "mcpdoc", "mcpdoc", "--urls", "ADK:https://adk.dev/llms.txt", "--transport", "stdio"]
+      "args": ["--from", "mcpdoc", "mcpdoc", "--urls", "AgentDevelopmentKit:https://adk.dev/llms.txt",
+               "--transport", "stdio"]
     }
   }
 }
 ```
 
-Optional, to let Antigravity query the hackathon data directly over MCP, run MCP Toolbox with
-`toolbox/tools.yaml` and add it as an HTTP MCP server at `http://127.0.0.1:5000/mcp`.
+Optional: the example's `wms-toolbox` entry runs MCP Toolbox over stdio with `toolbox/tools.yaml`
+(AlloyDB + BigQuery) or `toolbox/tools.cloudsql.yaml` (the codelab's Cloud SQL instance) so
+Antigravity itself can query the hackathon data, including OTD, yard dwell and PC*MILER lanes.
+Use an absolute path to the tools file and restrict tools in Project Settings if you want.
 
 ## 2. Project context
 
@@ -63,11 +74,11 @@ Use the adk-docs MCP server to confirm current ADK APIs. Communicate efficiently
 ## 3. Spec-kit setup and constitution
 
 Spec-kit commands live in `.agents/workflows/` (slash commands) and `.specify/` (templates,
-scripts, memory). If `.agents/workflows/speckit.*.md` is not in the repo yet, add spec-kit with
-`uvx --from git+https://github.com/github/spec-kit.git specify init --here` (choose the agent
-option your Antigravity version supports), or copy `.agents/workflows/` and `.specify/templates`
-and `.specify/scripts` from the codelab's starter repository. Keep the existing
-`.specify/memory/constitution.md`.
+scripts, memory). This repo ships the constitution and specs but not the spec-kit command files.
+Copy them from your clone of the codelab starter with
+`bash scripts/install_speckit.sh ~/sdd-adk-agents-agy` (or `make speckit SRC=~/sdd-adk-agents-agy`),
+or run `bash scripts/install_speckit.sh --specify-cli` to use the spec-kit CLI. Both keep the
+existing `.specify/memory/constitution.md`.
 
 Review or amend the constitution:
 
@@ -138,7 +149,36 @@ ADK docs MCP server and the adk-wms-tool-builder and wms-portable-sql skills.
 /speckit.implement
 ```
 
-### 4.2 Temperature excursion monitoring (cold chain)
+### 4.2 (Reference) McLane delivery view: PC*MILER, geofences, dwell and OTD
+
+Use this to show how `specs/002-delivery-otd-geofence/` was built.
+
+```text
+/speckit.specify Extend the warehouse copilot with McLane's delivery view. Transportation and DC
+managers need: Retail and Restaurant on-time delivery (OTD) this week vs last, by DC, route, chain
+and customer, with why stops were late (late departure, customer dwell, traffic, route plan);
+dwell time changes for inbound trailers in the DC yard (gate-in to gate-out, by carrier) and for our
+trucks at customers (by chain); geofence activity (trailers in the yard that have not checked in,
+detention risk, trucks at customers now); PC*MILER practical miles and drive time for lanes and
+routes; customer geolocation and receiving windows (restaurants 60 min, retail 120 min); and, during
+a mid-shift disruption, which customer windows tomorrow's late waves will miss and how many the
+re-plan recovers. Same rules: grounded numbers, approver on every action, food safety first.
+```
+
+```text
+/speckit.plan Add tables geofences, geofence_events, lane_miles, route_trips and route_stops plus
+lat/lon, receiving window and standard dwell on customers and distribution_centers in
+warehouse_agent/schema.py. Generate them in warehouse_data/delivery.py with its own random stream so
+existing demo numbers do not move, planting: FDL restaurant late departures this week, chronically
+late route MTX-R07 (drive time over PC*MILER), Taco Trail dwell up at FDL, Lonestar yard dwell up at
+MTX, and a trailer in the MTX yard geofence that has not checked in. Add warehouse_agent/pcmiler.py
+(PC*MILER Web Services when PCMILER_API_KEY is set, else lane_miles, else an estimate), seven tools
+in tools/delivery.py, a delivery_otd_agent, a delivery snapshot collector in the shift briefing and
+a replan_otd_agent in the disruption re-plan. Use the wms-portable-sql, adk-wms-tool-builder and
+mclane-otd-dwell skills; add tests and keep make test green.
+```
+
+### 4.3 Temperature excursion monitoring (cold chain)
 
 ```text
 /speckit.specify Add cold-chain temperature excursion monitoring. Reefer trailers at doors and
@@ -157,7 +197,7 @@ inventory_snapshot_agent, and update prompts. Use the wms-portable-sql and adk-w
 skills. Add tests and keep make test green.
 ```
 
-### 4.3 Real-time events with Pub/Sub
+### 4.4 Real-time events with Pub/Sub
 
 ```text
 /speckit.specify Make the copilot near-real-time. WMS task completions, ASN receipts, appointment
@@ -175,7 +215,7 @@ get_dock_exceptions every 5 minutes and posts to a Google Chat webhook. Keep too
 the data freshness changes. Document the infra in deploy/.
 ```
 
-### 4.4 Vertex AI arrival-time prediction for the dock
+### 4.5 Vertex AI arrival-time prediction for the dock
 
 ```text
 /speckit.specify Replace the carrier-median baseline in predict_dock_arrivals with a learned ETA model
@@ -190,7 +230,7 @@ backend and keep the carrier-median baseline as the fallback for SQLite/AlloyDB.
 in minutes versus the baseline and record the result in research.md.
 ```
 
-### 4.5 Batch picking and pick-path sequencing
+### 4.6 Batch picking and pick-path sequencing
 
 ```text
 /speckit.specify Recommend batch picking for small orders and a serpentine pick sequence per
@@ -236,8 +276,9 @@ quality and accessibility. Fix what they find and give me a walkthrough with scr
 ## 6. Skills
 
 The repo ships `wms-portable-sql`, `adk-wms-tool-builder`, `wms-synthetic-data`,
-`gemini-enterprise-deploy` and `wms-demo-facts` in `.agents/skills/` (workspace scope). Install
-the ADK agent skills too if you like: `uvx google-agents-cli setup`.
+`gemini-enterprise-deploy`, `wms-demo-facts` and `mclane-otd-dwell` in `.agents/skills/`
+(workspace scope; each is a folder with a `SKILL.md` that has `name` and `description` frontmatter,
+plus optional `scripts/` and `references/`). Global skills go in `~/.gemini/config/skills/`.
 
 **Use a skill**
 ```text
@@ -273,6 +314,14 @@ demo facts script against BigQuery and confirm the numbers match SQLite. Ask bef
 command that creates cloud resources.
 ```
 
+**Cloud SQL for PostgreSQL (the sdd-adk-agents-agy instance)**
+```text
+Load the warehouse dataset into the Cloud SQL instance the sdd-adk-antigravity codelab created
+(restaurant-db in {{REGION}}) with deploy/setup_cloudsql.sh, as a separate `wms` database so the
+restaurant concierge tables are untouched. Ask me for DB_PASSWORD, never echo it. Then set
+WMS_DB_BACKEND=cloudsql and CLOUD_SQL_INSTANCE in warehouse_agent/.env and run the demo facts script.
+```
+
 **AlloyDB**
 ```text
 Provision AlloyDB with deploy/setup_alloydb.sh in {{REGION}} (ask me for the password, never echo
@@ -304,4 +353,15 @@ Create an ADK eval set in tests/eval/ with 15 supervisor questions from docs/DEM
 their expected tool calls (for example "Why are we behind in the cooler?" -> transfer to
 fulfillment_agent, diagnose_zone_backlog with dc_id and zone). Run `adk eval` and report tool
 trajectory and response scores. Then suggest instruction changes for the lowest-scoring cases.
+```
+
+## 10. Delivery questions to rehearse
+
+```text
+Run these against the live agent and compare each answer with the wms-demo-facts output (delivery
+section): "Why is restaurant OTD down at FDL?", "Which MTX route is always late and why?",
+"Is dwell time going up anywhere?", "Which trucks are in the MTX yard right now?",
+"How many PC*MILER miles is route FDL-R03 tomorrow?", "Where is Taco Trail #2084 and when do they
+take deliveries?". Fix prompts in warehouse_agent/prompts.py if an answer mixes Retail and
+Restaurant OTD, omits the miles source, or has no next action and approver.
 ```

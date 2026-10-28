@@ -22,7 +22,7 @@ gcloud alloydb instances create "$INSTANCE" --cluster="$CLUSTER" --region="$REGI
 
 export ALLOYDB_INSTANCE_URI="projects/$PROJECT/locations/$REGION/clusters/$CLUSTER/instances/$INSTANCE"
 export ALLOYDB_USER=postgres ALLOYDB_DATABASE=wms
-python -m warehouse_data.load_alloydb --csv data/csv --drop --create-db
+python -m warehouse_data.load_postgres --target alloydb --csv data/csv --drop --create-db
 echo "AlloyDB ready. Set in warehouse_agent/.env:"
 echo "  WMS_DB_BACKEND=alloydb"
 echo "  ALLOYDB_INSTANCE_URI=$ALLOYDB_INSTANCE_URI"
